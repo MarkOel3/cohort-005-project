@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useFetcher, useSearchParams } from "react-router";
 import { toast } from "sonner";
 import { z } from "zod";
@@ -16,26 +16,21 @@ import { data, isRouteErrorResponse, Link } from "react-router";
 import { formatPrice } from "~/lib/utils";
 import {
   approveRefundRequest,
+  chooseReviewTab,
   declineRefundRequest,
-  getRefundRequestStatus,
   listRefundRequestsForReview,
   type RefundRequestForReview,
 } from "~/lib/refunds.server";
+import {
+  parseHighlightedRefundRequest,
+  useScrollIntoViewWhenHighlighted,
+} from "~/lib/refund-request-highlight";
 import { RULE_BREAK_LABELS } from "~/lib/refund-rules";
 import { sendEmail } from "~/lib/mailer.server";
 import { sendNotifications } from "~/lib/notifier.server";
 
-const refundFilterSchema = z
-  .nativeEnum(RefundStatus)
-  .catch(RefundStatus.Open);
-
-// A Notification links here with `refundRequest=<id>`. A bad id is ignored.
-const highlightSchema = z.coerce
-  .number()
-  .int()
-  .positive()
-  .optional()
-  .catch(undefined);
+// A missing or invalid tab is no tab: the page then picks one.
+const refundFilterSchema = z.nativeEnum(RefundStatus).nullable().catch(null);
 
 const adminRefundActionSchema = z.discriminatedUnion("intent", [
   z.object({
@@ -93,22 +88,17 @@ export function meta() {
 export async function loader({ request, url }: Route.LoaderArgs) {
   await requirePlatformAdmin(request);
 
-  const highlightId = highlightSchema.parse(
-    url.searchParams.get("refundRequest") ?? undefined
+  // The link was fixed when the Notification was sent, so open the tab the
+  // request sits on now, unless a tab was asked for.
+  const { status, highlightedId } = chooseReviewTab(
+    db,
+    refundFilterSchema.parse(url.searchParams.get("status")),
+    parseHighlightedRefundRequest(url.searchParams)
   );
-  // The link was fixed when the Notification was sent, so look up where the
-  // request sits now and open that tab, unless a tab was asked for.
-  const highlightStatus =
-    highlightId === undefined ? null : getRefundRequestStatus(db, highlightId);
-  const explicitStatus = url.searchParams.get("status");
-  const status =
-    explicitStatus === null && highlightStatus !== null
-      ? highlightStatus
-      : refundFilterSchema.parse(explicitStatus);
 
   return {
     status,
-    highlightedId: highlightStatus === null ? null : (highlightId ?? null),
+    highlightedId,
     refundRequests: listRefundRequestsForReview(db, status, new Date()),
   };
 }
@@ -291,13 +281,7 @@ function RefundRequestCard({
   refundRequest: RefundRequestForReview;
   highlighted: boolean;
 }) {
-  const cardRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (highlighted) {
-      cardRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
-    }
-  }, [highlighted]);
+  const cardRef = useScrollIntoViewWhenHighlighted<HTMLDivElement>(highlighted);
 
   const fetcher = useFetcher<
     { success: true; message: string } | { error: string }

@@ -36,7 +36,8 @@ describe("getNotificationFeedConfig", () => {
       feedChannelId: "feed-channel-uuid",
       userId: "42",
     });
-    const { payload, protectedHeader } = await verified(config!.userToken);
+    if (!config) throw new Error("Expected a Notification Feed config");
+    const { payload, protectedHeader } = await verified(config.userToken);
     expect(protectedHeader.alg).toBe("RS256");
     expect(payload.sub).toBe("42");
     expect(payload.exp).toBeGreaterThan(Date.now() / 1000);
@@ -50,7 +51,8 @@ describe("getNotificationFeedConfig", () => {
       KNOCK_SIGNING_KEY: oneLine,
     });
 
-    expect((await verified(config!.userToken)).payload.sub).toBe("7");
+    if (!config) throw new Error("Expected a Notification Feed config");
+    expect((await verified(config.userToken)).payload.sub).toBe("7");
   });
 
   it("gives nothing without the signing key, so no feed opens without a user token", async () => {

@@ -25,6 +25,7 @@ import {
   REFUND_WINDOW_DAYS,
   type RuleBreak,
 } from "~/lib/refund-rules";
+import { formatSeatCount, type PurchaseKind } from "~/lib/purchase-kind";
 
 // ─── Refunds ───
 // Everything about Refund Requests: whether a Purchase may be refunded, raising
@@ -83,9 +84,7 @@ function isClaimed(seat: Seat) {
   return seat.redeemedAt !== null;
 }
 
-// There is no column saying which kind a Purchase is: a Team Licence is the
-// Purchase that granted Seats, and every Team Licence grants at least one.
-export type PurchaseKind = "individual_purchase" | "team_licence";
+export type { PurchaseKind };
 
 function kindOf(seats: Seat[]): PurchaseKind {
   return seats.length > 0 ? "team_licence" : "individual_purchase";
@@ -456,9 +455,9 @@ function buildRaisedNotifications(
   if (recipients.length === 0) return [];
 
   // No rule breaks: they are live figures and would go stale in the feed.
-  const what =
+  const purchaseDescription =
     kindOf(seats) === "team_licence"
-      ? `a Team Licence for ${courseTitle} with ${seats.length} ${seats.length === 1 ? "Seat" : "Seats"}`
+      ? `a Team Licence for ${courseTitle} with ${formatSeatCount(seats.length)}`
       : `an Individual Purchase of ${courseTitle}`;
 
   return [
@@ -467,7 +466,7 @@ function buildRaisedNotifications(
       recipients,
       actor: asNotificationPerson(buyer),
       headline: `Refund Request raised for ${courseTitle}`,
-      body: `${buyer.name} asked for ${formatPrice(purchase.amountPaid)} back on ${what}.`,
+      body: `${buyer.name} asked for ${formatPrice(purchase.amountPaid)} back on ${purchaseDescription}.`,
       link: `/admin/refunds?refundRequest=${refundRequestId}`,
       refundRequestId,
     },
@@ -612,6 +611,26 @@ export function getRefundRequestStatus(
   return row?.status ?? null;
 }
 
+/**
+ * Which tab the admin refunds page shows, and which request on it to
+ * highlight. Without an asked-for tab it opens the one the highlighted request
+ * sits on now. A request on another tab, or an unknown one, is not
+ * highlighted.
+ */
+export function chooseReviewTab(
+  db: Queryable,
+  requestedStatus: RefundStatus | null,
+  highlightId: number | null
+): { status: RefundStatus; highlightedId: number | null } {
+  const highlightStatus =
+    highlightId === null ? null : getRefundRequestStatus(db, highlightId);
+  const status = requestedStatus ?? highlightStatus ?? RefundStatus.Open;
+  return {
+    status,
+    highlightedId: highlightStatus === status ? highlightId : null,
+  };
+}
+
 /** A Team Admin's Team Licences, with what the team page needs to refund one. */
 export function listTeamLicences(db: Queryable, buyerId: number, now: Date) {
   const bought = db
@@ -714,7 +733,7 @@ export function approveRefundRequest(
 
     const { purchase } = found;
     const seats = getSeats(tx, purchase.id);
-    let keepsAccess = false;
+    let keepsEnrollment = false;
 
     if (kindOf(seats) === "team_licence") {
       if (seats.some(isClaimed)) {
@@ -745,7 +764,7 @@ export function approveRefundRequest(
         )
         .get();
 
-      keepsAccess = !!claimedSeat;
+      keepsEnrollment = !!claimedSeat;
 
       if (!claimedSeat) {
         tx.delete(enrollments)
@@ -778,7 +797,7 @@ export function approveRefundRequest(
         refundRequestId,
         purchase,
         platformAdminId,
-        { decision: RefundStatus.Approved, keepsAccess }
+        { decision: RefundStatus.Approved, keepsEnrollment }
       ),
     };
   });
@@ -840,7 +859,7 @@ export function declineRefundRequest(
 }
 
 type DecidedOutcome =
-  | { decision: RefundStatus.Approved; keepsAccess: boolean }
+  | { decision: RefundStatus.Approved; keepsEnrollment: boolean }
   | { decision: RefundStatus.Declined };
 
 /**
@@ -880,22 +899,23 @@ function buildDecidedNotifications(
   const amount = formatPrice(purchase.amountPaid);
 
   const isTeamLicence = kindOf(getSeats(db, purchase.id)) === "team_licence";
+  const refundRequestFor = isTeamLicence
+    ? `Your Refund Request for the Team Licence for ${courseTitle}`
+    : `Your Refund Request for ${courseTitle}`;
 
   let body: string;
   if (outcome.decision === RefundStatus.Declined) {
     // No "raise a new Refund Request" line: it would invite repeat requests.
-    body = isTeamLicence
-      ? `Your Refund Request for the Team Licence for ${courseTitle} was declined.`
-      : `Your Refund Request for ${courseTitle} was declined.`;
+    body = `${refundRequestFor} was declined.`;
   } else if (isTeamLicence) {
-    body = `Your Refund Request for the Team Licence for ${courseTitle} was approved. ${amount} will be returned.`;
+    body = `${refundRequestFor} was approved. ${amount} will be returned.`;
   } else {
     // An Enrollment isn't tied to the Purchase that granted it, so a Claimed
     // Seat on the same course keeps it (docs/adr/0004).
-    const access = outcome.keepsAccess
+    const access = outcome.keepsEnrollment
       ? `You still have access to ${courseTitle} through your team's Seat.`
       : `You no longer have access to ${courseTitle}.`;
-    body = `Your Refund Request for ${courseTitle} was approved. ${amount}, the full amount you paid, will be returned. ${access}`;
+    body = `${refundRequestFor} was approved. ${amount}, the full amount you paid, will be returned. ${access}`;
   }
 
   return [

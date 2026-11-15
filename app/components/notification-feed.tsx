@@ -4,7 +4,14 @@
 //
 // Feed data loads only in the browser, so the server renders an empty badge.
 // New Notifications arrive through Knock's WebSocket; Cadence never polls.
-import { createContext, useContext, useEffect, useRef, useState } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useNavigate } from "react-router";
 import {
   KnockFeedProvider,
@@ -14,13 +21,35 @@ import {
   type KnockProviderProps,
 } from "@knocklabs/react";
 import { Bell, Check, Receipt, X } from "lucide-react";
+import { z } from "zod";
 import { cn, formatRelativeTime } from "~/lib/utils";
 import type { NotificationFeedConfig } from "~/lib/notification-feed.server";
+import {
+  kindOfWorkflow,
+  notificationDataSchema,
+  type NotificationData,
+  type NotificationKind,
+} from "~/lib/notification-kinds";
 
-type NotificationData = { headline?: string; body?: string; link?: string };
-type FeedItem = ReturnType<
+type KnockFeedItem = ReturnType<
   KnockFeedProviderState["feedClient"]["getState"]
->["items"][number] & { data: NotificationData | null };
+>["items"][number];
+
+/** A Knock feed item with its kind and data checked against what Cadence sends. */
+type FeedItem = {
+  knockItem: KnockFeedItem;
+  kind: NotificationKind | null;
+  data: NotificationData | null;
+};
+
+function toFeedItem(knockItem: KnockFeedItem): FeedItem {
+  const data = notificationDataSchema.safeParse(knockItem.data);
+  return {
+    knockItem,
+    kind: kindOfWorkflow(knockItem.source.key),
+    data: data.success ? data.data : null,
+  };
+}
 
 /** Whether a KnockFeedProvider is mounted above the bell. */
 const FeedConnected = createContext(false);
@@ -67,16 +96,20 @@ const refreshUserToken: KnockProviderProps["onUserTokenExpiring"] =
   async () => {
     const response = await fetch("/api/notification-feed-token");
     if (!response.ok) return;
-    const { userToken } = (await response.json()) as { userToken: string };
-    return userToken;
+    const token = tokenResponseSchema.safeParse(await response.json());
+    return token.success ? token.data.userToken : undefined;
   };
 
-function KindIcon({ workflow }: { workflow: string }) {
-  if (workflow === "refund-request-approved")
-    return <Check className="size-4 shrink-0 text-green-600" />;
-  if (workflow === "refund-request-declined")
-    return <X className="size-4 shrink-0 text-red-600" />;
-  return <Receipt className="size-4 shrink-0 text-blue-600" />;
+const tokenResponseSchema = z.object({ userToken: z.string() });
+
+const KIND_ICONS: Record<NotificationKind, React.ReactNode> = {
+  refund_request_raised: <Receipt className="size-4 shrink-0 text-blue-600" />,
+  refund_request_approved: <Check className="size-4 shrink-0 text-green-600" />,
+  refund_request_declined: <X className="size-4 shrink-0 text-red-600" />,
+};
+
+function KindIcon({ kind }: { kind: NotificationKind | null }) {
+  return kind ? KIND_ICONS[kind] : KIND_ICONS.refund_request_raised;
 }
 
 function UnseenBadge({ count }: { count: number }) {
@@ -116,6 +149,8 @@ export function NotificationBell() {
 function ConnectedBell() {
   const { feedClient, useFeedStore } = useKnockFeed();
   const { items, metadata } = useFeedStore();
+  // Memoised so the dropdown's mark-as-seen effect only runs on new items.
+  const feedItems = useMemo(() => items.map(toFeedItem), [items]);
 
   useEffect(() => {
     feedClient.fetch();
@@ -124,10 +159,11 @@ function ConnectedBell() {
   return (
     <BellDropdown
       feed={{
-        items: items as FeedItem[],
+        items: feedItems,
         unseenCount: metadata.unseen_count,
-        markAsSeen: (unseen) => feedClient.markAsSeen(unseen),
-        markAsRead: (item) => feedClient.markAsRead(item),
+        markAsSeen: (unseen) =>
+          feedClient.markAsSeen(unseen.map((item) => item.knockItem)),
+        markAsRead: (item) => feedClient.markAsRead(item.knockItem),
         markAllAsRead: () => feedClient.markAllAsRead(),
       }}
     />
@@ -154,7 +190,7 @@ function BellDropdown({ feed }: { feed: Feed }) {
   // while it is open is seen straight away.
   useEffect(() => {
     if (!open) return;
-    const unseen = items.filter((item) => !item.seen_at);
+    const unseen = items.filter((item) => !item.knockItem.seen_at);
     if (unseen.length > 0) feed.markAsSeen(unseen);
     // feed is rebuilt every render; items is what matters here.
   }, [open, items]);
@@ -193,9 +229,9 @@ function BellDropdown({ feed }: { feed: Feed }) {
               </li>
             )}
             {items.map((item) => {
-              const unread = !item.read_at;
+              const unread = !item.knockItem.read_at;
               return (
-                <li key={item.id}>
+                <li key={item.knockItem.id}>
                   <button
                     onClick={() => follow(item)}
                     className={cn(
@@ -203,7 +239,7 @@ function BellDropdown({ feed }: { feed: Feed }) {
                       unread && "bg-primary/5"
                     )}
                   >
-                    <KindIcon workflow={item.source.key} />
+                    <KindIcon kind={item.kind} />
                     <div className="min-w-0 flex-1">
                       <div
                         className={cn(
@@ -217,7 +253,7 @@ function BellDropdown({ feed }: { feed: Feed }) {
                         {item.data?.body}
                       </div>
                       <div className="mt-1 text-[11px] text-muted-foreground">
-                        {formatRelativeTime(item.inserted_at)}
+                        {formatRelativeTime(item.knockItem.inserted_at)}
                       </div>
                     </div>
                     {unread && (
