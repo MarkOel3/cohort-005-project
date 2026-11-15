@@ -577,17 +577,39 @@ export function listRefundRequestsForBuyer(db: Queryable, buyerId: number) {
     .where(eq(purchases.userId, buyerId))
     .orderBy(desc(refunds.requestedAt), desc(refunds.id))
     .all()
-    .map((row) => ({
-      id: row.id,
-      status: row.status,
-      reason: row.reason,
-      decisionNote: row.decisionNote,
-      requestedAt: row.requestedAt,
-      resolvedAt: row.resolvedAt,
-      courseTitle: row.courseTitle,
-      courseSlug: row.courseSlug,
-      amountPaid: row.purchase.amountPaid,
-    }));
+    .map((row) => {
+      const seats = getSeats(db, row.purchase.id);
+      return {
+        id: row.id,
+        status: row.status,
+        kind: kindOf(seats),
+        seatCount: seats.length,
+        reason: row.reason,
+        decisionNote: row.decisionNote,
+        requestedAt: row.requestedAt,
+        resolvedAt: row.resolvedAt,
+        courseTitle: row.courseTitle,
+        courseSlug: row.courseSlug,
+        amountPaid: row.purchase.amountPaid,
+      };
+    });
+}
+
+/**
+ * Where a Refund Request stands now, or null when there is no such request.
+ * A Notification's link is fixed when it is sent, so the admin refunds page
+ * uses this to open the tab the request has since moved to.
+ */
+export function getRefundRequestStatus(
+  db: Queryable,
+  refundRequestId: number
+): RefundStatus | null {
+  const row = db
+    .select({ status: refunds.status })
+    .from(refunds)
+    .where(eq(refunds.id, refundRequestId))
+    .get();
+  return row?.status ?? null;
 }
 
 /** A Team Admin's Team Licences, with what the team page needs to refund one. */

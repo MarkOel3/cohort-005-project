@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useFetcher, useSearchParams } from "react-router";
 import { toast } from "sonner";
 import { z } from "zod";
@@ -17,6 +17,7 @@ import { formatPrice } from "~/lib/utils";
 import {
   approveRefundRequest,
   declineRefundRequest,
+  getRefundRequestStatus,
   listRefundRequestsForReview,
   type RefundRequestForReview,
 } from "~/lib/refunds.server";
@@ -26,6 +27,14 @@ import { sendEmail } from "~/lib/mailer.server";
 const refundFilterSchema = z
   .nativeEnum(RefundStatus)
   .catch(RefundStatus.Open);
+
+// A Notification links here with `refundRequest=<id>`. A bad id is ignored.
+const highlightSchema = z.coerce
+  .number()
+  .int()
+  .positive()
+  .optional()
+  .catch(undefined);
 
 const adminRefundActionSchema = z.discriminatedUnion("intent", [
   z.object({
@@ -83,10 +92,22 @@ export function meta() {
 export async function loader({ request, url }: Route.LoaderArgs) {
   await requirePlatformAdmin(request);
 
-  const status = refundFilterSchema.parse(url.searchParams.get("status"));
+  const highlightId = highlightSchema.parse(
+    url.searchParams.get("refundRequest") ?? undefined
+  );
+  // The link was fixed when the Notification was sent, so look up where the
+  // request sits now and open that tab, unless a tab was asked for.
+  const highlightStatus =
+    highlightId === undefined ? null : getRefundRequestStatus(db, highlightId);
+  const explicitStatus = url.searchParams.get("status");
+  const status =
+    explicitStatus === null && highlightStatus !== null
+      ? highlightStatus
+      : refundFilterSchema.parse(explicitStatus);
 
   return {
     status,
+    highlightedId: highlightStatus === null ? null : (highlightId ?? null),
     refundRequests: listRefundRequestsForReview(db, status, new Date()),
   };
 }
@@ -145,7 +166,7 @@ const FILTERS: { status: RefundStatus; label: string }[] = [
 ];
 
 export default function AdminRefunds({ loaderData }: Route.ComponentProps) {
-  const { status, refundRequests } = loaderData;
+  const { status, highlightedId, refundRequests } = loaderData;
   const [, setSearchParams] = useSearchParams();
 
   return (
@@ -199,6 +220,7 @@ export default function AdminRefunds({ loaderData }: Route.ComponentProps) {
             <RefundRequestCard
               key={refundRequest.id}
               refundRequest={refundRequest}
+              highlighted={refundRequest.id === highlightedId}
             />
           ))}
         </div>
@@ -261,9 +283,19 @@ function Figures({
 
 function RefundRequestCard({
   refundRequest,
+  highlighted,
 }: {
   refundRequest: RefundRequestForReview;
+  highlighted: boolean;
 }) {
+  const cardRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (highlighted) {
+      cardRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [highlighted]);
+
   const fetcher = useFetcher<
     { success: true; message: string } | { error: string }
   >();
@@ -288,7 +320,13 @@ function RefundRequestCard({
   }
 
   return (
-    <Card>
+    <Card
+      ref={cardRef}
+      id={`refund-request-${refundRequest.id}`}
+      className={
+        highlighted ? "bg-primary/5 ring-2 ring-primary ring-offset-2" : undefined
+      }
+    >
       <CardContent className="space-y-4 p-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
