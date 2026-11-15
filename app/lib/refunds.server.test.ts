@@ -6,6 +6,7 @@ import { LessonProgressStatus, RefundStatus, UserRole } from "~/db/schema";
 import {
   approveRefundRequest,
   checkRefundRequest,
+  chooseReviewTab,
   declineRefundRequest,
   getRefundOffer,
   getRefundRequestStatus,
@@ -855,5 +856,44 @@ describe("looking up a Refund Request's status", () => {
 
   it("gives nothing for an unknown id", () => {
     expect(getRefundRequestStatus(db, 999)).toBeNull();
+  });
+});
+
+describe("choosing the review tab for a highlighted Refund Request", () => {
+  it("opens the tab the highlighted request is on when no tab was asked for", () => {
+    const purchase = buyForSelf(base.user.id);
+    const id = raise(purchase.id, base.user.id);
+    declineRefundRequest(db, id, platformAdmin.id, "Past half way.", NOW);
+
+    expect(chooseReviewTab(db, null, id)).toEqual({
+      status: RefundStatus.Declined,
+      highlightedId: id,
+    });
+  });
+
+  it("keeps the asked-for tab, and only highlights a request that is on it", () => {
+    const purchase = buyForSelf(base.user.id);
+    const id = raise(purchase.id, base.user.id);
+    declineRefundRequest(db, id, platformAdmin.id, "Past half way.", NOW);
+
+    expect(chooseReviewTab(db, RefundStatus.Approved, id)).toEqual({
+      status: RefundStatus.Approved,
+      highlightedId: null,
+    });
+    expect(chooseReviewTab(db, RefundStatus.Declined, id)).toEqual({
+      status: RefundStatus.Declined,
+      highlightedId: id,
+    });
+  });
+
+  it("opens the Open tab without a highlight for an unknown request or none", () => {
+    expect(chooseReviewTab(db, null, 999)).toEqual({
+      status: RefundStatus.Open,
+      highlightedId: null,
+    });
+    expect(chooseReviewTab(db, null, null)).toEqual({
+      status: RefundStatus.Open,
+      highlightedId: null,
+    });
   });
 });

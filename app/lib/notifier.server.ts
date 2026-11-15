@@ -1,6 +1,11 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import Knock, { type ClientOptions } from "@knocklabs/node";
+import {
+  NOTIFICATION_WORKFLOWS,
+  type NotificationData,
+  type NotificationKind,
+} from "~/lib/notification-kinds";
 
 // ─── In-app Notifications ───
 // Knock delivers every Notification to its recipients' Notification Feeds when
@@ -11,10 +16,7 @@ import Knock, { type ClientOptions } from "@knocklabs/node";
 // Sending is best effort: a Notification that fails to send is logged and
 // lost, and never fails the action that raised it.
 
-export type NotificationKind =
-  | "refund_request_raised"
-  | "refund_request_approved"
-  | "refund_request_declined";
+export type { NotificationKind };
 
 /** A Cadence user as Knock sees them. Knock ids are strings. */
 export type NotificationPerson = { id: string; name: string; email: string };
@@ -35,12 +37,7 @@ export interface NotificationTransport {
   send(notification: Notification): Promise<void>;
 }
 
-/** One Knock workflow per kind, set up in the Knock dashboard. */
-function workflowKey(kind: NotificationKind): string {
-  return kind.replaceAll("_", "-");
-}
-
-type KnockOptions = Pick<ClientOptions, "fetch" | "baseURL">;
+type KnockOptions = Pick<ClientOptions, "fetch">;
 
 /**
  * Triggers the kind's Knock workflow. No SDK retries and no idempotency key:
@@ -56,7 +53,7 @@ export function knockTransport(
   return {
     async send(notification) {
       await knock.workflows.trigger(
-        workflowKey(notification.kind),
+        NOTIFICATION_WORKFLOWS[notification.kind],
         {
           recipients: notification.recipients,
           actor: notification.actor,
@@ -65,7 +62,7 @@ export function knockTransport(
             body: notification.body,
             link: notification.link,
             refundRequestId: notification.refundRequestId,
-          },
+          } satisfies NotificationData,
         },
         // The SDK adds an idempotency key of its own; null removes it.
         { headers: { "Idempotency-Key": null } }

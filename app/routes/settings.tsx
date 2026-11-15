@@ -17,14 +17,16 @@ import { db } from "~/db";
 import { eq } from "drizzle-orm";
 import { formatPrice } from "~/lib/utils";
 import { listRefundRequestsForBuyer } from "~/lib/refunds.server";
+import { purchaseKindLabel } from "~/lib/purchase-kind";
+import {
+  parseHighlightedRefundRequest,
+  useScrollIntoViewWhenHighlighted,
+} from "~/lib/refund-request-highlight";
 
 const settingsSchema = z.object({
   name: z.string().trim().min(1, "Name cannot be empty."),
   bio: z.string().trim().optional(),
 });
-
-// A link from a Notification names the Refund Request it is about.
-const highlightSchema = z.coerce.number().int().positive();
 
 export function meta() {
   return [
@@ -55,14 +57,14 @@ export async function loader({ request }: Route.LoaderArgs) {
   const refundRequests = listRefundRequestsForBuyer(db, currentUserId);
 
   // Anything invalid, unknown or not this buyer's is ignored.
-  const requested = highlightSchema.safeParse(
-    new URL(request.url).searchParams.get("refundRequest") ?? undefined
+  const requested = parseHighlightedRefundRequest(
+    new URL(request.url).searchParams
   );
-  const highlightedRefundRequestId =
-    requested.success &&
-    refundRequests.some((refundRequest) => refundRequest.id === requested.data)
-      ? requested.data
-      : null;
+  const highlightedRefundRequestId = refundRequests.some(
+    (refundRequest) => refundRequest.id === requested
+  )
+    ? requested
+    : null;
 
   return {
     user: {
@@ -118,11 +120,6 @@ export default function Settings({ loaderData }: Route.ComponentProps) {
   ).length;
   const fetcher = useFetcher();
   const nameInputRef = useRef<HTMLInputElement>(null);
-  const highlightedRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    highlightedRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
-  }, [highlightedRefundRequestId]);
 
   useEffect(() => {
     if (fetcher.state === "idle" && fetcher.data?.success) {
@@ -220,63 +217,73 @@ export default function Settings({ loaderData }: Route.ComponentProps) {
             )}
           </CardHeader>
           <CardContent className="space-y-4">
-            {refundRequests.map((refundRequest) => {
-              const isHighlighted =
-                refundRequest.id === highlightedRefundRequestId;
-              return (
-                <div
-                  key={refundRequest.id}
-                  id={`refund-request-${refundRequest.id}`}
-                  ref={isHighlighted ? highlightedRef : undefined}
-                  className={
-                    isHighlighted
-                      ? "rounded-md border border-primary bg-primary/5 p-3 ring-2 ring-primary"
-                      : "rounded-md border p-3"
-                  }
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <Link
-                      to={
-                        refundRequest.kind === "team_licence"
-                          ? "/team"
-                          : `/courses/${refundRequest.courseSlug}`
-                      }
-                      className="font-medium hover:underline"
-                    >
-                      {refundRequest.courseTitle}
-                    </Link>
-                    <RefundStatusBadge status={refundRequest.status} />
-                  </div>
-                  <p className="mt-1 text-xs font-medium text-muted-foreground">
-                    {refundRequest.kind === "team_licence"
-                      ? `Team Licence · ${refundRequest.seatCount} ${
-                          refundRequest.seatCount === 1 ? "seat" : "seats"
-                        }`
-                      : "Individual"}
-                  </p>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    {formatPrice(refundRequest.amountPaid)} · raised{" "}
-                    {new Date(refundRequest.requestedAt).toLocaleDateString()}
-                    {refundRequest.resolvedAt && (
-                      <>
-                        {" "}
-                        · decided{" "}
-                        {new Date(refundRequest.resolvedAt).toLocaleDateString()}
-                      </>
-                    )}
-                  </p>
-                  <p className="mt-2 text-sm">{refundRequest.reason}</p>
-                  {refundRequest.decisionNote && (
-                    <p className="mt-2 rounded-md bg-muted p-2 text-sm">
-                      <span className="font-medium">Our note: </span>
-                      {refundRequest.decisionNote}
-                    </p>
-                  )}
-                </div>
-              );
-            })}
+            {refundRequests.map((refundRequest) => (
+              <RefundRequestItem
+                key={refundRequest.id}
+                refundRequest={refundRequest}
+                highlighted={refundRequest.id === highlightedRefundRequestId}
+              />
+            ))}
           </CardContent>
         </Card>
+      )}
+    </div>
+  );
+}
+
+type BuyerRefundRequest = ReturnType<typeof listRefundRequestsForBuyer>[number];
+
+function RefundRequestItem({
+  refundRequest,
+  highlighted,
+}: {
+  refundRequest: BuyerRefundRequest;
+  highlighted: boolean;
+}) {
+  const ref = useScrollIntoViewWhenHighlighted<HTMLDivElement>(highlighted);
+
+  return (
+    <div
+      ref={ref}
+      id={`refund-request-${refundRequest.id}`}
+      className={
+        highlighted
+          ? "rounded-md border border-primary bg-primary/5 p-3 ring-2 ring-primary"
+          : "rounded-md border p-3"
+      }
+    >
+      <div className="flex items-start justify-between gap-3">
+        <Link
+          to={
+            refundRequest.kind === "team_licence"
+              ? "/team"
+              : `/courses/${refundRequest.courseSlug}`
+          }
+          className="font-medium hover:underline"
+        >
+          {refundRequest.courseTitle}
+        </Link>
+        <RefundStatusBadge status={refundRequest.status} />
+      </div>
+      <p className="mt-1 text-xs font-medium text-muted-foreground">
+        {purchaseKindLabel(refundRequest.kind, refundRequest.seatCount)}
+      </p>
+      <p className="mt-1 text-sm text-muted-foreground">
+        {formatPrice(refundRequest.amountPaid)} · raised{" "}
+        {new Date(refundRequest.requestedAt).toLocaleDateString()}
+        {refundRequest.resolvedAt && (
+          <>
+            {" "}
+            · decided {new Date(refundRequest.resolvedAt).toLocaleDateString()}
+          </>
+        )}
+      </p>
+      <p className="mt-2 text-sm">{refundRequest.reason}</p>
+      {refundRequest.decisionNote && (
+        <p className="mt-2 rounded-md bg-muted p-2 text-sm">
+          <span className="font-medium">Our note: </span>
+          {refundRequest.decisionNote}
+        </p>
       )}
     </div>
   );
