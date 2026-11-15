@@ -4,6 +4,10 @@ import { cn } from "~/lib/utils";
 import { UserRole } from "~/db/schema";
 import { UserAvatar } from "~/components/user-avatar";
 import {
+  NotificationsSidebarHeaderSlot,
+  NotificationsSidebarNavSlot,
+} from "~/components/notifications.prototype"; // PROTOTYPE
+import {
   BookOpen,
   ChartColumn,
   LayoutDashboard,
@@ -140,6 +144,7 @@ export function Sidebar({
         <NavLink to="/" className="text-lg font-bold tracking-tight">
           Cadence
         </NavLink>
+        {currentUser && <NotificationsSidebarHeaderSlot />}
       </div>
 
       <nav className="flex-1 space-y-1 p-3">
@@ -178,6 +183,7 @@ export function Sidebar({
             Team
           </NavLink>
         )}
+        {currentUser && <NotificationsSidebarNavSlot />}
       </nav>
 
       {recentCourses.length > 0 && (
