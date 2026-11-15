@@ -97,6 +97,8 @@ Cadence sends in-app Notifications about Refund Requests through [Knock](https:/
 | `KNOCK_FEED_CHANNEL_ID` | **Integrations → Channels** → your in-app feed channel → Channel ID.                                                     | The bell, in the browser |
 | `KNOCK_SIGNING_KEY`     | **Developers → API keys → Signing key** → Generate. Paste the private key (PEM) as one line, with `\n` for line breaks. | Signing user tokens      |
 
+The bell in the sidebar needs `KNOCK_PUBLIC_API_KEY`, `KNOCK_FEED_CHANNEL_ID` and `KNOCK_SIGNING_KEY`. Without all three it stays idle and shows "No Notifications yet". The app layout signs a Knock user token for the signed-in user, and the bell fetches a fresh one from `/api/notification-feed-token` before it expires.
+
 Each Knock environment (development, production) has its own keys. Turn on **enhanced security mode** (same page as the signing key) before real users see the bell: without it, the public key can read any user's Notification Feed.
 
 ### Workflows
