@@ -8,6 +8,7 @@ import {
   checkRefundRequest,
   declineRefundRequest,
   getRefundOffer,
+  getRefundRequestStatus,
   getSeatAvailability,
   listRefundRequestsForBuyer,
   listRefundRequestsForReview,
@@ -500,5 +501,21 @@ describe("listing Refund Requests", () => {
       { seatCount: 2, claimedSeatCount: 1, canRequestRefund: false },
       { seatCount: 2, claimedSeatCount: 0, canRequestRefund: true },
     ]);
+  });
+});
+
+describe("looking up a Refund Request's status", () => {
+  it("gives the current status of a known Refund Request", () => {
+    const purchase = buyForSelf(base.user.id);
+    const id = raise(purchase.id, base.user.id);
+    expect(getRefundRequestStatus(db, id)).toBe(RefundStatus.Open);
+
+    declineRefundRequest(db, id, platformAdmin.id, "Past half way.", NOW);
+
+    expect(getRefundRequestStatus(db, id)).toBe(RefundStatus.Declined);
+  });
+
+  it("gives nothing for an unknown id", () => {
+    expect(getRefundRequestStatus(db, 999)).toBeNull();
   });
 });
