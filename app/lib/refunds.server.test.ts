@@ -490,6 +490,23 @@ describe("listing Refund Requests", () => {
     ]);
   });
 
+  it("tells a buyer the kind and Seat count of each Refund Request", () => {
+    const individualId = raise(buyForSelf(base.user.id).id, base.user.id);
+    const { purchase: licence } = buySeats(base.user.id, 3);
+    const teamId = raise(licence.id, base.user.id);
+
+    const listed = listRefundRequestsForBuyer(db, base.user.id);
+
+    expect(listed.find((r) => r.id === individualId)).toMatchObject({
+      kind: "individual_purchase",
+      seatCount: 0,
+    });
+    expect(listed.find((r) => r.id === teamId)).toMatchObject({
+      kind: "team_licence",
+      seatCount: 3,
+    });
+  });
+
   it("lists a Team Admin's Team Licences and whether each can be refunded", () => {
     const priya = addLearner("Priya");
     buySeats(priya.id, 2);
