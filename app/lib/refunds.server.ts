@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { alias } from "drizzle-orm/sqlite-core";
 import * as schema from "~/db/schema";
@@ -15,8 +15,10 @@ import {
   videoWatchEvents,
   LessonProgressStatus,
   RefundStatus,
+  UserRole,
 } from "~/db/schema";
 import { formatPrice } from "~/lib/utils";
+import type { Notification, NotificationPerson } from "~/lib/notifier.server";
 import {
   REFUND_COMPLETION_LIMIT,
   REFUND_WATCH_LIMIT_SECONDS,
@@ -351,7 +353,13 @@ export function getRefundOffer(
 export type Email = { to: string; subject: string; body: string };
 
 export type RaiseResult =
-  | { ok: true; refundRequestId: number; kind: PurchaseKind; email: Email }
+  | {
+      ok: true;
+      refundRequestId: number;
+      kind: PurchaseKind;
+      email: Email;
+      notifications: Notification[];
+    }
   | Failure;
 
 export function raiseRefundRequest(
@@ -387,10 +395,20 @@ export function raiseRefundRequest(
     .returning()
     .get();
 
+  const seats = getSeats(db, purchase.id);
+
   return {
     ok: true,
     refundRequestId: refundRequest.id,
-    kind: kindOf(getSeats(db, purchase.id)),
+    kind: kindOf(seats),
+    notifications: buildRaisedNotifications(
+      db,
+      refundRequest.id,
+      purchase,
+      seats,
+      buyer,
+      course.title
+    ),
     email: {
       to: buyer.email,
       subject: `Refund requested — ${course.title}`,
@@ -406,6 +424,54 @@ export function raiseRefundRequest(
       ].join("\n"),
     },
   };
+}
+
+// ─── Notifications ───
+
+type User = typeof users.$inferSelect;
+
+function asNotificationPerson(user: User): NotificationPerson {
+  return { id: String(user.id), name: user.name, email: user.email };
+}
+
+/**
+ * The "raised" Notification: one, addressed to every user who is a Platform
+ * Admin right now, except the buyer. Instructors and Seat holders never get it.
+ */
+function buildRaisedNotifications(
+  db: Queryable,
+  refundRequestId: number,
+  purchase: Purchase,
+  seats: Seat[],
+  buyer: User,
+  courseTitle: string
+): Notification[] {
+  const recipients = db
+    .select()
+    .from(users)
+    .where(and(eq(users.role, UserRole.Admin), ne(users.id, buyer.id)))
+    .all()
+    .map(asNotificationPerson);
+
+  if (recipients.length === 0) return [];
+
+  // No rule breaks: they are live figures and would go stale in the feed.
+  const what =
+    kindOf(seats) === "team_licence"
+      ? `a Team Licence for ${courseTitle} with ${seats.length} ${seats.length === 1 ? "Seat" : "Seats"}`
+      : `an Individual Purchase of ${courseTitle}`;
+
+  return [
+    {
+      kind: "refund_request_raised",
+      recipients,
+      actor: asNotificationPerson(buyer),
+      headline: `Refund Request raised for ${courseTitle}`,
+      body: `${buyer.name} asked for ${formatPrice(purchase.amountPaid)} back on ${what}.`,
+      link: `/admin/refunds?refundRequest=${refundRequestId}`,
+      refundRequestId,
+    },
+  ];
 }
 
 // ─── Listing Refund Requests ───

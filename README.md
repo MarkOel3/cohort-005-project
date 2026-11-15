@@ -84,6 +84,38 @@ You don't need these yet, but you'll be asked for them along the way. Both have 
 - **[Knock](https://knock.app/)**, a free Developer account, when you build notifications. Its keys go in `.env`, which is gitignored.
 - **[tldraw](https://www.tldraw.com/)**, for whiteboarding your tasks. Any drawing app will do.
 
+## Knock
+
+Cadence sends in-app Notifications about Refund Requests through [Knock](https://knock.app/). Knock is optional in local dev. Without `KNOCK_SECRET_API_KEY`, each Notification is written as a JSON file to `.notifications/`, which is gitignored, and nothing calls Knock. Knock's in-app channel has no sandbox, so every trigger sent to Knock counts toward the Free plan's 10,000 Messages a month, even in development.
+
+### `.env` keys
+
+| Key                     | Where to find it                                                                                                         | Used by                  |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------ |
+| `KNOCK_SECRET_API_KEY`  | Knock dashboard → **Developers → API keys** → Secret API key (`sk_…`). Server only; never expose it.                     | Triggering workflows     |
+| `KNOCK_PUBLIC_API_KEY`  | Same page → Public API key (`pk_…`).                                                                                     | The bell, in the browser |
+| `KNOCK_FEED_CHANNEL_ID` | **Integrations → Channels** → your in-app feed channel → Channel ID.                                                     | The bell, in the browser |
+| `KNOCK_SIGNING_KEY`     | **Developers → API keys → Signing key** → Generate. Paste the private key (PEM) as one line, with `\n` for line breaks. | Signing user tokens      |
+
+Each Knock environment (development, production) has its own keys. Turn on **enhanced security mode** (same page as the signing key) before real users see the bell: without it, the public key can read any user's Notification Feed.
+
+### Workflows
+
+Create one workflow per kind of Notification in the Knock dashboard, then **Commit** it (API triggers use the last committed version):
+
+| Workflow key              | Sent when                                  | Recipients                            |
+| ------------------------- | ------------------------------------------ | ------------------------------------- |
+| `refund-request-raised`   | A buyer raises a Refund Request            | Every Platform Admin except the buyer |
+| `refund-request-approved` | A Platform Admin approves a Refund Request | The buyer                             |
+| `refund-request-declined` | A Platform Admin declines a Refund Request | The buyer                             |
+
+Each workflow has a single **In-app feed** step on your feed channel, using the **Standard** template. Cadence writes the wording, so the template only shows it:
+
+- Markdown body: `**{{ data.headline }}**` then, on the next line, `{{ data.body }}`
+- Action URL: `{{ data.link }}`
+
+The trigger data also carries `refundRequestId`. Recipients and the actor are Cadence user ids as strings, with name and email inline. Cadence sends no idempotency key and turns off SDK retries: delivery is best effort, and a failed trigger is logged and lost.
+
 ## Scripts
 
 | Command                      | Description                                  |
