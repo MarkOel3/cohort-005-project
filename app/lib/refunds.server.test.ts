@@ -237,6 +237,137 @@ describe("raising a Refund Request", () => {
   });
 });
 
+describe("the Notification for a raised Refund Request", () => {
+  function addPlatformAdmin(name: string) {
+    return db
+      .insert(schema.users)
+      .values({
+        name,
+        email: `${name.toLowerCase()}@example.com`,
+        role: UserRole.Admin,
+      })
+      .returning()
+      .get();
+  }
+
+  function raiseAndNotify(purchaseId: number, buyerId: number) {
+    const result = raiseRefundRequest(
+      db,
+      purchaseId,
+      buyerId,
+      "It was not what I expected.",
+      NOW
+    );
+    if (!result.ok) throw new Error(result.error);
+    return result;
+  }
+
+  it("goes to every Platform Admin, as one Notification", () => {
+    const secondAdmin = addPlatformAdmin("Quinn");
+    const purchase = buyForSelf(base.user.id);
+
+    const { notifications } = raiseAndNotify(purchase.id, base.user.id);
+
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0].kind).toBe("refund_request_raised");
+    expect(notifications[0].recipients.map((r) => r.id).sort()).toEqual(
+      [String(platformAdmin.id), String(secondAdmin.id)].sort()
+    );
+  });
+
+  it("leaves out the buyer when the buyer is a Platform Admin", () => {
+    const secondAdmin = addPlatformAdmin("Quinn");
+    const purchase = buyForSelf(platformAdmin.id);
+
+    const { notifications } = raiseAndNotify(purchase.id, platformAdmin.id);
+
+    expect(notifications[0].recipients.map((r) => r.id)).toEqual([
+      String(secondAdmin.id),
+    ]);
+    expect(notifications[0].actor.id).toBe(String(platformAdmin.id));
+  });
+
+  it("sends nothing when the buyer is the only Platform Admin", () => {
+    const purchase = buyForSelf(platformAdmin.id);
+
+    const { notifications } = raiseAndNotify(purchase.id, platformAdmin.id);
+
+    expect(notifications).toEqual([]);
+  });
+
+  it("never goes to the Instructor or to Seat holders", () => {
+    const teamAdmin = addLearner("Priya");
+    const earlierLicence = buySeats(teamAdmin.id, 3);
+    claimSeat(earlierLicence.seats[0].id, addLearner("Ben").id);
+    const { purchase } = buySeats(teamAdmin.id, 2);
+
+    const { notifications } = raiseAndNotify(purchase.id, teamAdmin.id);
+
+    expect(notifications[0].recipients.map((r) => r.id)).toEqual([
+      String(platformAdmin.id),
+    ]);
+  });
+
+  it("names the buyer, the course, the amount and an Individual Purchase", () => {
+    const purchase = buyForSelf(base.user.id, 3, 4900);
+
+    const result = raiseAndNotify(purchase.id, base.user.id);
+
+    expect(result.notifications[0]).toMatchObject({
+      headline: "Refund Request raised for Test Course",
+      body: "Test User asked for $49.00 back on an Individual Purchase of Test Course.",
+      refundRequestId: result.refundRequestId,
+    });
+  });
+
+  it("gives a Team Licence's Seat count", () => {
+    const teamAdmin = addLearner("Priya");
+    const { purchase } = buySeats(teamAdmin.id, 3);
+
+    const { notifications } = raiseAndNotify(purchase.id, teamAdmin.id);
+
+    expect(notifications[0].body).toBe(
+      "Priya asked for $237.00 back on a Team Licence for Test Course with 3 Seats."
+    );
+  });
+
+  it("leaves out the reason", () => {
+    const purchase = buyForSelf(base.user.id);
+
+    const { notifications } = raiseAndNotify(purchase.id, base.user.id);
+
+    expect(JSON.stringify(notifications)).not.toContain("not what I expected");
+  });
+
+  it("links to the request on the admin refunds page", () => {
+    const purchase = buyForSelf(base.user.id);
+
+    const result = raiseAndNotify(purchase.id, base.user.id);
+
+    expect(result.notifications[0].link).toBe(
+      `/admin/refunds?refundRequest=${result.refundRequestId}`
+    );
+  });
+
+  it("is not produced when the raise fails", () => {
+    const purchase = buyForSelf(base.user.id);
+    raise(purchase.id, base.user.id);
+
+    const conflict = raiseRefundRequest(db, purchase.id, base.user.id, "Again.", NOW);
+    const notFound = raiseRefundRequest(db, 9999, base.user.id, "Nope.", NOW);
+    const late = buyForSelf(addLearner("Ben").id, 20);
+    const forbidden = raiseRefundRequest(db, late.id, late.userId, "Late.", NOW);
+
+    for (const result of [conflict, notFound, forbidden]) {
+      expect(result.ok).toBe(false);
+      expect(result).not.toHaveProperty("notifications");
+    }
+    expect([conflict, notFound, forbidden].map((r) => !r.ok && r.status)).toEqual(
+      [409, 404, 403]
+    );
+  });
+});
+
 describe("the refund offer on the course page", () => {
   it("offers the newest Individual Purchase, not a newer Team Licence", () => {
     const individual = buyForSelf(base.user.id, 3);
