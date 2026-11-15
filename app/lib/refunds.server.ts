@@ -656,7 +656,9 @@ export function listTeamLicences(db: Queryable, buyerId: number, now: Date) {
 
 // ─── Deciding a Refund Request ───
 
-export type DecisionResult = { ok: true; email: Email } | Failure;
+export type DecisionResult =
+  | { ok: true; email: Email; notifications: Notification[] }
+  | Failure;
 
 function findOpenRefundRequest(
   tx: Queryable,
@@ -712,6 +714,7 @@ export function approveRefundRequest(
 
     const { purchase } = found;
     const seats = getSeats(tx, purchase.id);
+    let keepsAccess = false;
 
     if (kindOf(seats) === "team_licence") {
       if (seats.some(isClaimed)) {
@@ -742,6 +745,8 @@ export function approveRefundRequest(
         )
         .get();
 
+      keepsAccess = !!claimedSeat;
+
       if (!claimedSeat) {
         tx.delete(enrollments)
           .where(
@@ -768,6 +773,13 @@ export function approveRefundRequest(
     return {
       ok: true,
       email: buildDecisionEmail(tx, purchase, RefundStatus.Approved, note),
+      notifications: buildDecidedNotifications(
+        tx,
+        refundRequestId,
+        purchase,
+        platformAdminId,
+        { decision: RefundStatus.Approved, keepsAccess }
+      ),
     };
   });
 }
@@ -816,8 +828,90 @@ export function declineRefundRequest(
         RefundStatus.Declined,
         trimmedNote
       ),
+      notifications: buildDecidedNotifications(
+        tx,
+        refundRequestId,
+        found.purchase,
+        platformAdminId,
+        { decision: RefundStatus.Declined }
+      ),
     };
   });
+}
+
+type DecidedOutcome =
+  | { decision: RefundStatus.Approved; keepsAccess: boolean }
+  | { decision: RefundStatus.Declined };
+
+/**
+ * The "approved" or "declined" Notification: one, addressed to the buyer
+ * only, unless the buyer is the Platform Admin who decided. It speaks as
+ * Cadence, so it never names the decider or carries the decision note (the
+ * Settings page shows that), and never says when the money will arrive.
+ */
+function buildDecidedNotifications(
+  db: Queryable,
+  refundRequestId: number,
+  purchase: Purchase,
+  platformAdminId: number,
+  outcome: DecidedOutcome
+): Notification[] {
+  if (purchase.userId === platformAdminId) return [];
+
+  const buyer = db
+    .select()
+    .from(users)
+    .where(eq(users.id, purchase.userId))
+    .get();
+  const decider = db
+    .select()
+    .from(users)
+    .where(eq(users.id, platformAdminId))
+    .get();
+  const course = db
+    .select()
+    .from(courses)
+    .where(eq(courses.id, purchase.courseId))
+    .get();
+
+  if (!buyer || !decider || !course) return [];
+
+  const courseTitle = course.title;
+  const amount = formatPrice(purchase.amountPaid);
+
+  const isTeamLicence = kindOf(getSeats(db, purchase.id)) === "team_licence";
+
+  let body: string;
+  if (outcome.decision === RefundStatus.Declined) {
+    // No "raise a new Refund Request" line: it would invite repeat requests.
+    body = isTeamLicence
+      ? `Your Refund Request for the Team Licence for ${courseTitle} was declined.`
+      : `Your Refund Request for ${courseTitle} was declined.`;
+  } else if (isTeamLicence) {
+    body = `Your Refund Request for the Team Licence for ${courseTitle} was approved. ${amount} will be returned.`;
+  } else {
+    // An Enrollment isn't tied to the Purchase that granted it, so a Claimed
+    // Seat on the same course keeps it (docs/adr/0004).
+    const access = outcome.keepsAccess
+      ? `You still have access to ${courseTitle} through your team's Seat.`
+      : `You no longer have access to ${courseTitle}.`;
+    body = `Your Refund Request for ${courseTitle} was approved. ${amount}, the full amount you paid, will be returned. ${access}`;
+  }
+
+  return [
+    {
+      kind:
+        outcome.decision === RefundStatus.Approved
+          ? "refund_request_approved"
+          : "refund_request_declined",
+      recipients: [asNotificationPerson(buyer)],
+      actor: asNotificationPerson(decider),
+      headline: `Refund Request ${outcome.decision} for ${courseTitle}`,
+      body,
+      link: `/settings?refundRequest=${refundRequestId}`,
+      refundRequestId,
+    },
+  ];
 }
 
 /** The email the buyer gets once their Refund Request is decided. */
