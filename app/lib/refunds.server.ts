@@ -511,17 +511,22 @@ export function listRefundRequestsForBuyer(db: Queryable, buyerId: number) {
     .where(eq(purchases.userId, buyerId))
     .orderBy(desc(refunds.requestedAt), desc(refunds.id))
     .all()
-    .map((row) => ({
-      id: row.id,
-      status: row.status,
-      reason: row.reason,
-      decisionNote: row.decisionNote,
-      requestedAt: row.requestedAt,
-      resolvedAt: row.resolvedAt,
-      courseTitle: row.courseTitle,
-      courseSlug: row.courseSlug,
-      amountPaid: row.purchase.amountPaid,
-    }));
+    .map((row) => {
+      const seats = getSeats(db, row.purchase.id);
+      return {
+        id: row.id,
+        status: row.status,
+        kind: kindOf(seats),
+        seatCount: seats.length,
+        reason: row.reason,
+        decisionNote: row.decisionNote,
+        requestedAt: row.requestedAt,
+        resolvedAt: row.resolvedAt,
+        courseTitle: row.courseTitle,
+        courseSlug: row.courseSlug,
+        amountPaid: row.purchase.amountPaid,
+      };
+    });
 }
 
 /** A Team Admin's Team Licences, with what the team page needs to refund one. */
